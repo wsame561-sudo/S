@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 import pyotp  # NEW: For Auto TOTP Generation
-from smartapi import SmartConnect
+from SmartApi import SmartConnect
 from datetime import datetime, timedelta
 
 # ==========================================
