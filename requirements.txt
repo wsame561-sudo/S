@@ -1,0 +1,7 @@
+smartapi-python
+pandas
+requests
+streamlit
+pyotp
+colorama
+numpy
