@@ -3,12 +3,12 @@ import time
 import requests
 import pandas as pd
 import numpy as np
-import pyotp  # NEW: For Auto TOTP Generation
-from SmartApi import SmartConnect
+import pyotp
+from SmartApi import SmartConnect  # FIXED: Case Sensitive Import
 from datetime import datetime, timedelta
 
 # ==========================================
-# 1. PAGE CONFIGURATION (Strictly Untouched)
+# 1. PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
     page_title="Quantum Algo Trader",
@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Neon Look
+# Custom CSS for UI
 st.markdown("""
     <style>
     .metric-card {
@@ -42,21 +42,19 @@ st.title("🚀 QUANTUM ALGO TRADER V2.0")
 st.markdown("### [ AI-Powered Nifty Breakout Scanner ]")
 
 # ==========================================
-# 2. UPDATED SIDEBAR LOGIN (From 1.py)
+# 2. SIDEBAR LOGIN (MANUAL)
 # ==========================================
 with st.sidebar:
     st.header("🔐 Login (Manual)")
     st.caption("Enter Angel One Details Here")
     
-    # 1. User Inputs (Secrets की जगह अब Manual Input)
     api_key = st.text_input("API Key", type="password")
     client_id = st.text_input("Client ID")
     password = st.text_input("Password", type="password")
-    totp_secret = st.text_input("TOTP Secret Key", type="password", help="Enter the long code provided by Angel One for Authenticator")
+    totp_secret = st.text_input("TOTP Secret Key", type="password")
 
     connect_btn = st.button("🔌 CONNECT SYSTEM")
 
-    # Session State Initialization
     if 'angel_api' not in st.session_state:
         st.session_state['angel_api'] = None
 
@@ -65,31 +63,27 @@ with st.sidebar:
             st.error("❌ All fields are required!")
         else:
             try:
-                # --- LOGIN LOGIC (Updated to match 1.py) ---
                 smartApi = SmartConnect(api_key=api_key)
-                
-                # Auto Generate TOTP (6 Digit Code)
                 try:
                     totp_obj = pyotp.TOTP(totp_secret).now()
                 except:
                     st.error("Invalid TOTP Secret Key format!")
                     st.stop()
                 
-                # Generate Session
                 data = smartApi.generateSession(client_id, password, totp_obj)
                 
                 if data['status']:
                     st.session_state['angel_api'] = smartApi
                     st.success("✅ Connected Successfully!")
-                    st.rerun() # Refresh page to start scanner
+                    time.sleep(1)
+                    st.rerun()
                 else:
                     st.error(f"❌ Login Failed: {data['message']}")
-            
             except Exception as e:
                 st.error(f"❌ Connection Error: {e}")
 
 # ==========================================
-# 3. HELPER FUNCTIONS (Strictly Untouched)
+# 3. HELPER FUNCTIONS
 # ==========================================
 @st.cache_resource
 def get_master_data():
@@ -137,14 +131,23 @@ def get_high_delta_option(master_df, spot_price, signal_type):
     return options.iloc[0]['token'], options.iloc[0]['symbol'], selected_strike
 
 def calculate_indicators(df):
+    # 1. EMA 20
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
+    
+    # 2. RSI 14
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
+    
+    # 3. Support/Resistance
     df['resistance_level'] = df['high'].rolling(window=20).max().shift(1)
     df['support_level'] = df['low'].rolling(window=20).min().shift(1)
+    
+    # 4. AVG VOLUME (Updated: Moved inside here to fix Error)
+    df['avg_vol'] = df['volume'].rolling(window=20).mean()
+    
     return df
 
 def calculate_trade_setup(entry_price, candle_low, candle_high, signal_type):
@@ -166,16 +169,15 @@ def calculate_trade_setup(entry_price, candle_low, candle_high, signal_type):
     }
 
 # ==========================================
-# 4. MAIN APP LOGIC (Scanning Loop)
+# 4. MAIN APP LOGIC
 # ==========================================
 
-# Check if logged in
 if st.session_state['angel_api'] is None:
     st.info("👋 Please enter your API Credentials in the Sidebar and click CONNECT.")
 else:
     obj = st.session_state['angel_api']
     
-    # Load Master Data Once
+    # Load Master Data
     if 'master_df' not in st.session_state:
         with st.spinner("Downloading Scrip Master..."):
             st.session_state['master_df'] = get_master_data()
@@ -190,16 +192,10 @@ else:
         else:
             st.success(f"✅ System Armed: Scanning {NIFTY_SYMBOL}")
             
-            # Start Scanning Button
             start_scan = st.toggle("🚀 RUN LIVE SCANNER", value=True)
-            
             placeholder = st.empty()
             
             if start_scan:
-                # Main Loop logic for Streamlit (using st_autorefresh manually via loop inside placeholder)
-                # Note: In Streamlit Cloud, while True loops can be tricky, 
-                # but for simplicity we use basic loop with sleep.
-                
                 try:
                     # Fetch Data
                     to_date = datetime.now()
@@ -214,22 +210,22 @@ else:
                         df = pd.DataFrame(cdata['data'], columns=["timestamp", "open", "high", "low", "close", "volume"])
                         for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
                         
+                        # Calculate Indicators (Avg Vol is fixed here)
                         df = calculate_indicators(df)
                         latest = df.iloc[-1]
                         
                         # --- DASHBOARD METRICS ---
                         col1, col2, col3, col4 = st.columns(4)
                         col1.metric("Nifty Price", f"₹{latest['close']}", delta=round(latest['close'] - latest['open'], 1))
-                        
-                        rsi_val = round(latest['rsi'], 2)
-                        col2.metric("RSI (14)", rsi_val)
-                        
+                        col2.metric("RSI (14)", round(latest['rsi'], 2))
                         col3.metric("EMA (20)", round(latest['ema_20'], 2))
                         col4.metric("Volume", int(latest['volume']))
 
                         # --- LOGIC ---
-                        df['avg_vol'] = df['volume'].rolling(20).mean()
-                        is_high_vol = latest['volume'] > latest['avg_vol']
+                        # Safe check for avg_vol
+                        avg_vol = latest['avg_vol'] if not pd.isna(latest['avg_vol']) else 0
+                        is_high_vol = latest['volume'] > avg_vol
+                        
                         breakout_up = latest['close'] > latest['resistance_level']
                         breakout_down = latest['close'] < latest['support_level']
                         trend_up = latest['close'] > latest['ema_20']
@@ -269,7 +265,7 @@ else:
                             }]))
                         
                         else:
-                            st.info(f"📡 Scanning... No Signal yet. (Last Update: {datetime.now().strftime('%H:%M:%S')})")
+                            st.info(f"📡 Scanning... No Signal yet. (Time: {datetime.now().strftime('%H:%M:%S')})")
                             
                     else:
                         st.warning("⚠️ Data fetch error or Market Closed.")
@@ -277,7 +273,6 @@ else:
                 except Exception as e:
                     st.error(f"Runtime Error: {e}")
                 
-                # Auto-refresh logic (Simple sleep for Streamlit Loop)
                 time.sleep(10)
                 st.rerun()
             
